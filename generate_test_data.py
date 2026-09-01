@@ -3,7 +3,7 @@ import os
 import time
 from playwright.async_api import async_playwright
 from onepassword import Client
-from onepassword.types import ItemCreateParams, ItemField, ItemCategory
+from onepassword.types import ItemCreateParams, ItemField, ItemCategory, ItemFieldType
 
 DOMAIN_URL = os.getenv("DOMAIN_URL", "https://proton07.1password.com")
 EMAIL = os.getenv("EMAIL", "Nitesh.Msinha@proton.me")
@@ -22,35 +22,45 @@ async def generate_signin_events():
         )
         page = await browser.new_page()
 
-        # Step A: Failed Sign-in Attempt
+        # Step A: Intentional Failed Sign-in Attempt
         try:
             await page.goto(f"{DOMAIN_URL}/signin", wait_until="networkidle")
+            await page.wait_for_selector('input[type="email"]', timeout=10000)
+            
             await page.fill('input[type="email"]', EMAIL)
-            await page.click('button:has-text("Next"), button[type="submit"]')
-            await page.wait_for_selector('input[type="password"]', timeout=10000)
+            
+            # Fill Secret Key if present
+            secret_key_field = page.locator('input[name="secretKey"], input[id="secret-key"]')
+            if await secret_key_field.is_visible():
+                await secret_key_field.fill(SECRET_KEY or "A3-XXXXXX-XXXXXX-XXXXX-XXXXX-XXXXX-XXXXX")
 
-            await page.fill('input[type="password"]', "WrongPassword123!")
-            await page.click('button:has-text("Sign in"), button[type="submit"]')
-            await page.wait_for_timeout(3000)
-            print(" -> Failed sign-in attempt triggered.")
+            # Fill Wrong Password
+            password_field = page.locator('input[type="password"]')
+            if await password_field.is_visible():
+                await password_field.fill("WrongPassword123!")
+                await page.keyboard.press("Enter")
+                await page.wait_for_timeout(3000)
+                print(" -> Failed sign-in attempt triggered.")
         except Exception as e:
             print(f"Failed attempt step warning: {e}")
 
         # Step B: Successful Sign-in Attempt
         try:
             await page.goto(f"{DOMAIN_URL}/signin", wait_until="networkidle")
-            await page.fill('input[type="email"]', EMAIL)
-            await page.click('button:has-text("Next"), button[type="submit"]')
-            await page.wait_for_selector('input[type="password"]', timeout=10000)
+            await page.wait_for_selector('input[type="email"]', timeout=10000)
 
-            secret_key_field = page.locator('input[name="secretKey"]')
-            if await secret_key_field.is_visible():
+            await page.fill('input[type="email"]', EMAIL)
+
+            secret_key_field = page.locator('input[name="secretKey"], input[id="secret-key"]')
+            if await secret_key_field.is_visible() and SECRET_KEY:
                 await secret_key_field.fill(SECRET_KEY)
 
-            await page.fill('input[type="password"]', MASTER_PASSWORD)
-            await page.click('button:has-text("Sign in"), button[type="submit"]')
-            await page.wait_for_timeout(5000)
-            print(" -> Successful sign-in attempt triggered.")
+            password_field = page.locator('input[type="password"]')
+            if await password_field.is_visible() and MASTER_PASSWORD:
+                await password_field.fill(MASTER_PASSWORD)
+                await page.keyboard.press("Enter")
+                await page.wait_for_timeout(5000)
+                print(" -> Successful sign-in attempt triggered.")
         except Exception as e:
             print(f"Successful attempt step warning: {e}")
 
@@ -71,25 +81,36 @@ async def generate_item_and_audit_events():
 
     timestamp = int(time.time())
 
+    # Formatted for 1Password SDK 0.4.1 spec
     new_item_params = ItemCreateParams(
         vault_id=SHARED_VAULT_ID,
         title=f"Auto-Test-Item-{timestamp}",
         category=ItemCategory.LOGIN,
         fields=[
-            ItemField(id="username", label="username", value=f"test_user_{timestamp}"),
-            ItemField(id="password", label="password", value="SecurePass123!")
+            ItemField(
+                id="username",
+                title="username",
+                field_type=ItemFieldType.TEXT,
+                value=f"test_user_{timestamp}"
+            ),
+            ItemField(
+                id="password",
+                title="password",
+                field_type=ItemFieldType.CONCEALED,
+                value="SecurePass123!"
+            )
         ]
     )
 
-    # Create Item (Audit event)
+    # 1. Create item (Audit event)
     item = await client.items.create(new_item_params)
     print(f" -> Created test item: {item.id}")
 
-    # Read Item (Item Usage event)
+    # 2. Read item field (Item Usage event)
     _ = await client.items.get(SHARED_VAULT_ID, item.id)
     print(" -> Read test item field.")
 
-    # Delete Item (Audit event)
+    # 3. Delete item (Audit event)
     await client.items.delete(SHARED_VAULT_ID, item.id)
     print(" -> Deleted test item.")
 
