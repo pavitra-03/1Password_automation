@@ -3,7 +3,7 @@ name: Daily 1Password Automated Pipeline
 on:
   schedule:
     - cron: '0 0 * * *'  # Runs automatically at 00:00 UTC daily
-  workflow_dispatch:      # Enables manual execution button
+  workflow_dispatch:      # Enables manual execution trigger from GitHub UI
 
 jobs:
   run-pipeline:
@@ -22,32 +22,37 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          playwright install --with-deps chromium
+          python -m playwright install chromium
 
+      # 1. Generate new test actions across all 3 endpoints
       - name: Generate Daily Synthetic Test Events
         env:
-          DOMAIN_URL: "https://proton12.1password.com"
-          EMAIL: "admin@proton12.com"
+          DOMAIN_URL: "https://proton07.1password.com"
+          EMAIL: "admin@proton07.com"
           MASTER_PASSWORD: ${{ secrets.ONEPASSWORD_MASTER_PASSWORD }}
           SECRET_KEY: ${{ secrets.ONEPASSWORD_SECRET_KEY }}
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           VAULT_ID: ${{ secrets.SHARED_VAULT_ID }}
         run: python generate_test_data.py
 
+      # Pause to let 1Password API backend index events
       - name: Wait for Cloud Log Indexing
         run: sleep 15
 
+      # 2. Restore cursor state from yesterday's execution
       - name: Restore Cursors Cache
         uses: actions/cache/restore@v4
         with:
           path: 1password_cursors.json
           key: 1password-cursor-state
 
+      # 3. Pull new log entries
       - name: Ingest 1Password Logs
         env:
           ONEPASSWORD_EVENTS_TOKEN: ${{ secrets.ONEPASSWORD_EVENTS_TOKEN }}
         run: python ingest.py
 
+      # 4. Save updated cursor state back to cache
       - name: Save Updated Cursors Cache
         uses: actions/cache/save@v4
         if: always()
@@ -55,6 +60,7 @@ jobs:
           path: 1password_cursors.json
           key: 1password-cursor-state-${{ github.run_id }}
 
+      # 5. Output log file artifact
       - name: Upload Ingested Logs Artifact
         uses: actions/upload-artifact@v4
         with:
