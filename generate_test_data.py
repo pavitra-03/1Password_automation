@@ -3,51 +3,64 @@ import os
 import time
 from playwright.async_api import async_playwright
 from onepassword import Client
+from onepassword.types import ItemCreateParams, ItemField, ItemCategory
 
-DOMAIN_URL = os.getenv("DOMAIN_URL", "https://proton12.1password.com")
-EMAIL = os.getenv("EMAIL", "admin@proton12.com")
+DOMAIN_URL = os.getenv("DOMAIN_URL", "https://proton07.1password.com")
+EMAIL = os.getenv("EMAIL", "Nitesh.Msinha@proton.me")
 MASTER_PASSWORD = os.getenv("MASTER_PASSWORD")
 SECRET_KEY = os.getenv("SECRET_KEY")
 SERVICE_ACCOUNT_TOKEN = os.getenv("OP_SERVICE_ACCOUNT_TOKEN")
-VAULT_ID = os.getenv("VAULT_ID")
+SHARED_VAULT_ID = os.getenv("SHARED_VAULT_ID")
 
 # --- USE CASE 2: Sign-in Attempts (Playwright Headless Browser) ---
 async def generate_signin_events():
     print("[1/2] Triggering Sign-in Attempts...")
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox"]
+        )
         page = await browser.new_page()
 
-        # Failed Sign-in Attempt
+        # Step A: Failed Sign-in Attempt
         try:
-            await page.goto(f"{DOMAIN_URL}/signin")
+            await page.goto(f"{DOMAIN_URL}/signin", wait_until="networkidle")
             await page.fill('input[type="email"]', EMAIL)
-            await page.fill('input[type="password"]', "WrongPassword123!")
-            await page.click('button[type="submit"]')
-            await page.wait_for_timeout(3000)
-        except Exception as e:
-            print(f"Failed attempt warning: {e}")
+            await page.click('button:has-text("Next"), button[type="submit"]')
+            await page.wait_for_selector('input[type="password"]', timeout=10000)
 
-        # Successful Sign-in Attempt
-        try:
-            await page.goto(f"{DOMAIN_URL}/signin")
-            await page.fill('input[type="email"]', EMAIL)
-            if await page.locator('input[name="secretKey"]').is_visible():
-                await page.fill('input[name="secretKey"]', SECRET_KEY)
-            await page.fill('input[type="password"]', MASTER_PASSWORD)
-            await page.click('button[type="submit"]')
-            await page.wait_for_timeout(5000)
+            await page.fill('input[type="password"]', "WrongPassword123!")
+            await page.click('button:has-text("Sign in"), button[type="submit"]')
+            await page.wait_for_timeout(3000)
+            print(" -> Failed sign-in attempt triggered.")
         except Exception as e:
-            print(f"Successful attempt warning: {e}")
+            print(f"Failed attempt step warning: {e}")
+
+        # Step B: Successful Sign-in Attempt
+        try:
+            await page.goto(f"{DOMAIN_URL}/signin", wait_until="networkidle")
+            await page.fill('input[type="email"]', EMAIL)
+            await page.click('button:has-text("Next"), button[type="submit"]')
+            await page.wait_for_selector('input[type="password"]', timeout=10000)
+
+            secret_key_field = page.locator('input[name="secretKey"]')
+            if await secret_key_field.is_visible():
+                await secret_key_field.fill(SECRET_KEY)
+
+            await page.fill('input[type="password"]', MASTER_PASSWORD)
+            await page.click('button:has-text("Sign in"), button[type="submit"]')
+            await page.wait_for_timeout(5000)
+            print(" -> Successful sign-in attempt triggered.")
+        except Exception as e:
+            print(f"Successful attempt step warning: {e}")
 
         await browser.close()
-    print(" -> Sign-in attempt actions completed.")
 
 # --- USE CASE 1 & 3: Item Usages & Audit Events (1Password SDK) ---
 async def generate_item_and_audit_events():
     print("[2/2] Triggering Item Usages & Audit Events...")
-    if not SERVICE_ACCOUNT_TOKEN:
-        print("Skipping SDK step: OP_SERVICE_ACCOUNT_TOKEN missing.")
+    if not SERVICE_ACCOUNT_TOKEN or not SHARED_VAULT_ID:
+        print("Skipping SDK step: OP_SERVICE_ACCOUNT_TOKEN or SHARED_VAULT_ID missing.")
         return
 
     client = await Client.authenticate(
@@ -57,35 +70,28 @@ async def generate_item_and_audit_events():
     )
 
     timestamp = int(time.time())
-    
-    # Use existing vault if provided, otherwise create a temporary test vault
-    target_vault_id = VAULT_ID
-    created_vault = None
-    
-    if not target_vault_id or target_vault_id == "dummy":
-        created_vault = await client.vaults.create(title=f"Auto-Vault-{timestamp}")
-        target_vault_id = created_vault.id
 
-    # Create Item (Generates Audit & Item Usage Events)
-    item = await client.items.create(
-        vault_id=target_vault_id,
+    new_item_params = ItemCreateParams(
+        vault_id=SHARED_VAULT_ID,
         title=f"Auto-Test-Item-{timestamp}",
-        category="LOGIN",
+        category=ItemCategory.LOGIN,
         fields=[
-            {"id": "username", "type": "STRING", "value": f"test_user_{timestamp}"},
-            {"id": "password", "type": "CONCEALED", "value": "SecurePass123!"}
+            ItemField(id="username", label="username", value=f"test_user_{timestamp}"),
+            ItemField(id="password", label="password", value="SecurePass123!")
         ]
     )
 
-    # Read Item (Generates Item Usage Event)
-    _ = await client.items.get(target_vault_id, item.id)
+    # Create Item (Audit event)
+    item = await client.items.create(new_item_params)
+    print(f" -> Created test item: {item.id}")
 
-    # Clean Up
-    await client.items.delete(target_vault_id, item.id)
-    if created_vault:
-        await client.vaults.delete(created_vault.id)
-        
-    print(" -> Item Usages & Audit events completed.")
+    # Read Item (Item Usage event)
+    _ = await client.items.get(SHARED_VAULT_ID, item.id)
+    print(" -> Read test item field.")
+
+    # Delete Item (Audit event)
+    await client.items.delete(SHARED_VAULT_ID, item.id)
+    print(" -> Deleted test item.")
 
 async def main():
     await generate_signin_events()
