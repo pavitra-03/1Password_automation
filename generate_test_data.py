@@ -5,7 +5,7 @@ from playwright.async_api import async_playwright
 from onepassword import Client
 from onepassword.types import ItemCreateParams, ItemField, ItemCategory, ItemFieldType, VaultCreateParams
 
-DOMAIN_URL = os.getenv("DOMAIN_URL", "https://proton07.1password.com")
+DOMAIN_URL = os.getenv("DOMAIN_URL", "https://sacumen123.1password.com")
 EMAIL = os.getenv("EMAIL", "Nitesh.Msinha@proton.me")
 MASTER_PASSWORD = os.getenv("MASTER_PASSWORD")
 SECRET_KEY = os.getenv("SECRET_KEY")
